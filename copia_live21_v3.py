@@ -16,19 +16,26 @@ from telethon.tl.types import ChannelParticipantAdmin, ChannelParticipantCreator
 import json
 import os
 
-# ===== CONFIGURE AQUI =====
-api_id = 12345678  # <-- TROQUE PELO SEU
-api_hash = 'SEU_API_HASH_AQUI'  # <-- TROQUE PELO SEU
+# ===== CONFIGURE AQUI - LÊ DO RAILWAY =====
+import os
+api_id = int(os.getenv('API_ID', '12345678'))
+api_hash = os.getenv('API_HASH', 'SEU_API_HASH_AQUI')
+# SESSION_STRING é opcional - se não tiver, ele vai pedir o código na primeira vez
+SESSION_STRING = os.getenv('SESSION_STRING', '')
 
-ORIGEM = 'teamlive21'
-DESTINO = 'Live21streaming'
+ORIGEM = os.getenv('ORIGEM', 'teamlive21')
+DESTINO = os.getenv('DESTINO', 'Live21streaming')
 
 ASSINATURA = "\n\n📢 _Informação oficial repassada para revendedores_"
 PALAVRAS_BLOQUEADAS = ["salário", "demissão", "reunião interna", "senha", "link interno"]
 ARQUIVO_MAPA = 'mapa_mensagens.json'
 # ===========================
 
-client = TelegramClient('sessao_live21', api_id, api_hash)
+from telethon.sessions import StringSession
+if SESSION_STRING:
+    client = TelegramClient(StringSession(SESSION_STRING), api_id, api_hash)
+else:
+    client = TelegramClient('sessao_live21', api_id, api_hash)
 
 # Carrega mapa salvo, se existir
 if os.path.exists(ARQUIVO_MAPA):
