@@ -1,37 +1,36 @@
 
 """
-SISTEMA DE CÓPIA AUTOMÁTICA - Live21 v3.0 FINAL
+SISTEMA DE CÓPIA AUTOMÁTICA - Live21 v4.0 - SESSION_STRING FINAL
 Origem: https://t.me/teamlive21
 Destino: https://t.me/Live21streaming
 
-v3.0 - SINCRONIZAÇÃO TOTAL:
+v4.0 - SESSION_STRING - SINCRONIZAÇÃO TOTAL:
 - Só copia se for ADMIN do teamlive21
 - Se EDITAR lá -> EDITA aqui
 - Se APAGAR lá -> APAGA aqui
 - Mapa salvo em arquivo, não perde se reiniciar
 """
 
+import os
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 from telethon.tl.types import ChannelParticipantAdmin, ChannelParticipantCreator
 import json
 import os
 
-# ===== CONFIGURE AQUI - LÊ DO RAILWAY =====
-import os
+# ===== CONFIGURE AQUI =====
 api_id = int(os.getenv('API_ID', '12345678'))
 api_hash = os.getenv('API_HASH', 'SEU_API_HASH_AQUI')
-# SESSION_STRING é opcional - se não tiver, ele vai pedir o código na primeira vez
 SESSION_STRING = os.getenv('SESSION_STRING', '')
 
-ORIGEM = os.getenv('ORIGEM', 'teamlive21')
-DESTINO = os.getenv('DESTINO', 'Live21streaming')
+ORIGEM = 'teamlive21'
+DESTINO = 'Live21streaming'
 
 ASSINATURA = "\n\n📢 _Informação oficial repassada para revendedores_"
 PALAVRAS_BLOQUEADAS = ["salário", "demissão", "reunião interna", "senha", "link interno"]
 ARQUIVO_MAPA = 'mapa_mensagens.json'
 # ===========================
 
-from telethon.sessions import StringSession
 if SESSION_STRING:
     client = TelegramClient(StringSession(SESSION_STRING), api_id, api_hash)
 else:
@@ -161,7 +160,7 @@ async def copiar_exclusao(event):
         except Exception as e:
             print(f"   ❌ Erro ao apagar {id_destino}: {e}")
 
-print("🚀 Sistema Live21 v3.0 FINAL ligado!")
+print("🚀 Sistema Live21 v4.0 - SESSION_STRING FINAL ligado!")
 print("👀 Ouvindo: @teamlive21 (SÓ ADMINS)")
 print("📤 Enviando para: @Live21streaming")
 print("✏️ Monitorando EDIÇÕES")
