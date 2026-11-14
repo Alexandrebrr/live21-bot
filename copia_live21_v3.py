@@ -1,84 +1,170 @@
-import os, asyncio, re
+
+"""
+SISTEMA DE CÓPIA AUTOMÁTICA - Live21 v4.0 - SESSION_STRING FINAL
+Origem: https://t.me/teamlive21
+Destino: https://t.me/Live21streaming
+
+v4.0 - SESSION_STRING - SINCRONIZAÇÃO TOTAL:
+- Só copia se for ADMIN do teamlive21
+- Se EDITAR lá -> EDITA aqui
+- Se APAGAR lá -> APAGA aqui
+- Mapa salvo em arquivo, não perde se reiniciar
+"""
+
+import os
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+from telethon.tl.types import ChannelParticipantAdmin, ChannelParticipantCreator
+import json
+import os
 
-API_ID = int(os.environ.get("API_ID", "0"))
-API_HASH = os.environ.get("API_HASH", "")
-SESSION_STRING = os.environ.get("SESSION_STRING", "")
-ORIGEM = os.environ.get("ORIGEM", "teamlive21")
-DESTINO = os.environ.get("DESTINO", "Live21streaming")
+# ===== CONFIGURE AQUI =====
+api_id = int(os.getenv('API_ID', '12345678'))
+api_hash = os.getenv('API_HASH', 'SEU_API_HASH_AQUI')
+SESSION_STRING = os.getenv('SESSION_STRING', '')
 
-# Se ORIGEM/DESTINO vierem com @ ou link, limpa
-def limpar(v):
-    v = v.strip()
-    v = v.replace("https://t.me/", "").replace("http://t.me/", "").replace("t.me/", "").replace("@", "")
-    return v.split("/")[0]
+ORIGEM = 'teamlive21'
+DESTINO = 'Live21streaming'
 
-ORIGEM = limpar(ORIGEM)
-DESTINO = limpar(DESTINO)
+ASSINATURA = "\n\n📢 _Informação oficial repassada para revendedores_"
+PALAVRAS_BLOQUEADAS = ["salário", "demissão", "reunião interna", "senha", "link interno"]
+ARQUIVO_MAPA = 'mapa_mensagens.json'
+# ===========================
 
-ASSINATURA = "\n\n✅ Informação oficial para revendedores Live21"
-PALAVRAS_BLOQUEADAS = ["xxx", "porno"]
-BLOQUEAR_STICKER = True
+if SESSION_STRING:
+    client = TelegramClient(StringSession(SESSION_STRING), api_id, api_hash)
+else:
+    client = TelegramClient('sessao_live21', api_id, api_hash)
 
-print("🚀 Sistema Live21 v4.0 ligado!", flush=True)
-print(f"👀 Ouvindo: @{ORIGEM} -> @{DESTINO}", flush=True)
+# Carrega mapa salvo, se existir
+if os.path.exists(ARQUIVO_MAPA):
+    try:
+        with open(ARQUIVO_MAPA, 'r', encoding='utf-8') as f:
+            mapa_mensagens = json.load(f)
+            # JSON salva as chaves como string, converte de volta para int
+            mapa_mensagens = {int(k): v for k, v in mapa_mensagens.items()}
+    except:
+        mapa_mensagens = {}
+else:
+    mapa_mensagens = {}
 
-async def main():
-    if not SESSION_STRING:
-        print("❌ ERRO: SESSION_STRING vazio! Coloque em Variables no Railway.", flush=True)
+def salvar_mapa():
+    try:
+        with open(ARQUIVO_MAPA, 'w', encoding='utf-8') as f:
+            json.dump(mapa_mensagens, f)
+    except Exception as e:
+        print(f"Erro ao salvar mapa: {e}")
+
+admins_cache = set()
+
+async def e_admin(user_id):
+    if user_id in admins_cache:
+        return True
+    try:
+        participante = await client.get_participant(ORIGEM, user_id)
+        p = participante.participant
+        if isinstance(p, (ChannelParticipantAdmin, ChannelParticipantCreator)):
+            admins_cache.add(user_id)
+            return True
+        return False
+    except Exception:
+        try:
+            async for participante in client.iter_participants(ORIGEM, filter=ChannelParticipantAdmin):
+                admins_cache.add(participante.id)
+            async for participante in client.iter_participants(ORIGEM, filter=ChannelParticipantCreator):
+                admins_cache.add(participante.id)
+            return user_id in admins_cache
+        except Exception as e2:
+            print(f"Aviso admin: {e2} - liberando")
+            return True
+
+async def deve_copiar(event, verificar_admin=True):
+    msg = event.message
+    texto = getattr(msg, 'text', '') or ""
+    if getattr(event, 'out', False):
+        return False
+    if getattr(msg, 'sticker', None):
+        return False
+    for palavra in PALAVRAS_BLOQUEADAS:
+        if palavra.lower() in texto.lower():
+            return False
+    if verificar_admin:
+        sender_id = getattr(event, 'sender_id', None)
+        if not sender_id:
+            return False
+        if not await e_admin(sender_id):
+            print(f"⏭️ Ignorado - não é admin: {sender_id}")
+            return False
+    return True
+
+@client.on(events.NewMessage(chats=ORIGEM))
+async def copiar_nova(event):
+    if not await deve_copiar(event):
         return
-    client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-    await client.start()
-    print("✅ Conectado no Telegram!", flush=True)
+    msg = event.message
+    texto = msg.text or ""
+    print(f"📩 Nova mensagem de ADMIN: {texto[:80]}...")
+    try:
+        if msg.media:
+            enviada = await client.send_file(DESTINO, msg.media, caption=(texto + ASSINATURA) if texto else ASSINATURA)
+        else:
+            enviada = await client.send_message(DESTINO, texto + ASSINATURA)
+        if isinstance(enviada, list):
+            mapa_mensagens[msg.id] = enviada[0].id
+        else:
+            mapa_mensagens[msg.id] = enviada.id
+        salvar_mapa()
+        print(f"✅ Enviado (origem {msg.id} -> destino {mapa_mensagens[msg.id]})")
+    except Exception as e:
+        print(f"❌ Erro ao copiar: {e}")
 
-    @client.on(events.NewMessage(chats=ORIGEM))
-    async def copiar(event):
+@client.on(events.MessageEdited(chats=ORIGEM))
+async def copiar_edicao(event):
+    msg = event.message
+    texto = msg.text or ""
+    if not await deve_copiar(event):
+        return
+    id_destino = mapa_mensagens.get(msg.id)
+    if not id_destino:
+        print(f"⚠️ Editada {msg.id} não encontrada, enviando como nova...")
+        await copiar_nova(event)
+        return
+    print(f"✏️ Admin editou {msg.id}, atualizando...")
+    try:
+        novo_texto = texto + ASSINATURA + "\n\n✏️ _Atualizado_"
+        await client.edit_message(DESTINO, id_destino, novo_texto)
+        print("✅ Atualizado no seu canal!")
+    except Exception as e:
+        print(f"❌ Erro ao editar: {e}")
         try:
-            # Só admins
-            try:
-                sender = await event.get_sender()
-                # Se for canal, verifica se é admin pelo chat
-                # Simplificação: copia tudo de ORIGEM, pois ORIGEM é canal de admins
-            except:
-                pass
-            msg = event.message
-            if not msg:
-                return
-            texto = msg.text or ""
-            if any(p.lower() in texto.lower() for p in PALAVRAS_BLOQUEADAS):
-                print("🚫 Bloqueada palavra proibida", flush=True)
-                return
-            if BLOQUEAR_STICKER and msg.sticker:
-                print("🚫 Sticker bloqueado", flush=True)
-                return
-            # Reposta sem forward: envia texto + mídia como nova mensagem
-            if msg.media:
-                await client.send_file(DESTINO, msg.media, caption=(texto + ASSINATURA) if texto else ASSINATURA)
-            else:
-                if texto:
-                    await client.send_message(DESTINO, texto + ASSINATURA)
-            print(f"✅ Copiado: {texto[:60]}", flush=True)
-        except Exception as e:
-            print(f"Erro copiar: {e}", flush=True)
+            await client.delete_messages(DESTINO, id_destino)
+            await copiar_nova(event)
+        except Exception as e2:
+            print(f"❌ Erro ao reenviar: {e2}")
 
-    @client.on(events.MessageEdited(chats=ORIGEM))
-    async def editar(event):
+@client.on(events.MessageDeleted(chats=ORIGEM))
+async def copiar_exclusao(event):
+    # event.deleted_ids pode ter 1 ou vários IDs
+    ids_apagados = event.deleted_ids
+    print(f"🗑️ Detectado apagamento no trabalho: {ids_apagados}")
+    for id_origem in ids_apagados:
+        id_destino = mapa_mensagens.get(id_origem)
+        if not id_destino:
+            print(f"   - ID {id_origem} não estava no seu canal, ignorando")
+            continue
         try:
-            # Apaga e reposta simplificado: avisa edição
-            print(f"✏️ Edição detectada id={event.id}", flush=True)
+            await client.delete_messages(DESTINO, id_destino)
+            print(f"   ✅ Apagado no seu canal também (destino {id_destino})")
+            del mapa_mensagens[id_origem]
+            salvar_mapa()
         except Exception as e:
-            print(f"Erro editar: {e}", flush=True)
+            print(f"   ❌ Erro ao apagar {id_destino}: {e}")
 
-    @client.on(events.MessageDeleted(chats=ORIGEM))
-    async def deletar(event):
-        try:
-            print(f"🗑️ Deleção detectada ids={event.deleted_ids}", flush=True)
-        except Exception as e:
-            print(f"Erro deletar: {e}", flush=True)
-
-    print("Aguardando...", flush=True)
-    await client.run_until_disconnected()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+print("🚀 Sistema Live21 v4.0 - SESSION_STRING FINAL ligado!")
+print("👀 Ouvindo: @teamlive21 (SÓ ADMINS)")
+print("📤 Enviando para: @Live21streaming")
+print("✏️ Monitorando EDIÇÕES")
+print("🗑️ Monitorando EXCLUSÕES")
+print("Aguardando...")
+client.start()
+client.run_until_disconnected()
