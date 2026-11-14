@@ -1,17 +1,11 @@
 
 """
-SISTEMA DE CÓPIA AUTOMÁTICA - Live21 v5.0 - ÁLBUM CORRIGIDO
-Origem: https://t.me/teamlive21
-Destino: https://t.me/Live21streaming
-v5.0 - Corrige bug do álbum:
-- Álbum (2+ fotos juntas) -> manda junto como álbum, 1 legenda só
-- Texto + foto -> mantém texto como legenda, não duplica
-- Preserva formatação (negrito, links, emoji)
-- Baixa a mídia e reenvia (sem "Encaminhado de")
-- Só copia se for ADMIN
-- Edita / Apaga junto
+Live21 v6.0 - CORRIGE unnamed -> FOTO DE VERDADE
+Bug da v5: download_media(file=bytes) perde o nome, Telegram manda como arquivo unnamed.
+Fix v6: baixa para BytesIO com .name = "foto.jpg" / "video.mp4", e force_document=False
+Assim volta como foto, não como arquivo.
 """
-import os, json, asyncio
+import os, json, asyncio, io
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.types import ChannelParticipantAdmin, ChannelParticipantCreator
@@ -19,7 +13,6 @@ from telethon.tl.types import ChannelParticipantAdmin, ChannelParticipantCreator
 api_id = int(os.getenv('API_ID', '0') or '0')
 api_hash = os.getenv('API_HASH', '')
 SESSION_STRING = os.getenv('SESSION_STRING', '')
-
 ORIGEM = 'teamlive21'
 DESTINO = 'Live21streaming'
 ASSINATURA = "\n\n📢 _Informação oficial repassada para revendedores_"
@@ -48,25 +41,23 @@ def salvar_mapa():
         print(f"Erro ao salvar mapa: {e}")
 
 admins_cache = set()
-# Buffer para álbum: grouped_id -> lista de eventos + task
 albuns_pendentes = {}
 
 async def e_admin(user_id):
     if user_id in admins_cache:
         return True
     try:
-        participante = await client.get_participant(ORIGEM, user_id)
-        p = participante.participant
+        p = (await client.get_participant(ORIGEM, user_id)).participant
         if isinstance(p, (ChannelParticipantAdmin, ChannelParticipantCreator)):
             admins_cache.add(user_id)
             return True
         return False
     except Exception:
         try:
-            async for participante in client.iter_participants(ORIGEM, filter=ChannelParticipantAdmin):
-                admins_cache.add(participante.id)
-            async for participante in client.iter_participants(ORIGEM, filter=ChannelParticipantCreator):
-                admins_cache.add(participante.id)
+            async for x in client.iter_participants(ORIGEM, filter=ChannelParticipantAdmin):
+                admins_cache.add(x.id)
+            async for x in client.iter_participants(ORIGEM, filter=ChannelParticipantCreator):
+                admins_cache.add(x.id)
             return user_id in admins_cache
         except Exception as e2:
             print(f"Aviso admin: {e2} - liberando")
@@ -84,49 +75,76 @@ def deve_copiar(event):
             return False
     return True
 
+def nome_arquivo(msg, idx):
+    # Descobre o tipo real e dá nome com extensão certa
+    try:
+        if getattr(msg, 'photo', None):
+            return f"foto_{msg.id}_{idx}.jpg"
+        if getattr(msg, 'video', None):
+            return f"video_{msg.id}_{idx}.mp4"
+        if getattr(msg, 'voice', None):
+            return f"audio_{msg.id}_{idx}.ogg"
+        if getattr(msg, 'audio', None):
+            return f"audio_{msg.id}_{idx}.mp3"
+        if getattr(msg, 'document', None):
+            # Tenta pegar nome original
+            for attr in msg.document.attributes:
+                if hasattr(attr, 'file_name') and attr.file_name:
+                    return attr.file_name
+            return f"arquivo_{msg.id}_{idx}.bin"
+        if getattr(msg, 'gif', None):
+            return f"gif_{msg.id}_{idx}.mp4"
+    except:
+        pass
+    return f"foto_{msg.id}_{idx}.jpg"
+
+async def baixar_com_nome(msg, idx):
+    bio = io.BytesIO()
+    bio.name = nome_arquivo(msg, idx)
+    try:
+        await client.download_media(msg, file=bio)
+        bio.seek(0)
+        if len(bio.getvalue()) == 0:
+            return None
+        return bio
+    except Exception as e:
+        print(f"Erro baixar {msg.id}: {e}")
+        return None
+
 async def enviar_album(grouped_id):
-    # Espera 2.5s para chegar todas as fotos do álbum
-    await asyncio.sleep(2.5)
+    await asyncio.sleep(3.0)
     eventos = albuns_pendentes.pop(grouped_id, [])
     if not eventos:
         return
-    # Ordena pelo ID (ordem original)
     eventos = sorted(eventos, key=lambda e: e.message.id)
     primeiro = eventos[0].message
-    texto = primeiro.text or ""
-    # Se o texto está na última foto do álbum (Telegram às vezes coloca), pega o maior texto
+    texto = ""
     for e in eventos:
-        if (e.message.text or "") and len(e.message.text) > len(texto):
-            texto = e.message.text
-    # Baixa todas as mídias
+        t = e.message.text or ""
+        if len(t) > len(texto):
+            texto = t
     arquivos = []
-    for e in eventos:
-        m = e.message
-        if m.media:
-            try:
-                bio = await client.download_media(m, file=bytes)
-                if bio:
-                    arquivos.append(bio)
-            except Exception as ex:
-                print(f"Erro baixar mídia {m.id}: {ex}")
+    for i, e in enumerate(eventos):
+        if e.message.media:
+            f = await baixar_com_nome(e.message, i)
+            if f:
+                arquivos.append(f)
     try:
         if arquivos:
-            # Manda como álbum: 1 legenda só, na primeira foto
             caption = (texto + ASSINATURA) if texto else ASSINATURA
-            # Telethon: send_file com lista = álbum
-            enviadas = await client.send_file(DESTINO, arquivos, caption=caption, parse_mode='md')
+            # force_document=False = manda como FOTO, não como arquivo
+            enviadas = await client.send_file(DESTINO, arquivos, caption=caption, parse_mode='md', force_document=False)
             if not isinstance(enviadas, list):
                 enviadas = [enviadas]
             for i, e in enumerate(eventos):
                 if i < len(enviadas):
                     mapa_mensagens[e.message.id] = enviadas[i].id
             salvar_mapa()
-            print(f"✅ Álbum enviado ({len(arquivos)} fotos, origem {eventos[0].message.id} -> destino {enviadas[0].id})")
+            print(f"✅ Álbum enviado como FOTO ({len(arquivos)} fotos)")
         else:
             enviada = await client.send_message(DESTINO, texto + ASSINATURA, parse_mode='md')
             mapa_mensagens[primeiro.id] = enviada.id
             salvar_mapa()
-            print(f"✅ Texto de álbum enviado")
     except Exception as e:
         print(f"❌ Erro ao copiar álbum: {e}")
 
@@ -136,9 +154,9 @@ async def enviar_unico(event):
     print(f"📩 Nova mensagem de ADMIN: {texto[:80]}...")
     try:
         if msg.media:
-            bio = await client.download_media(msg, file=bytes)
-            if bio:
-                enviada = await client.send_file(DESTINO, bio, caption=(texto + ASSINATURA) if texto else ASSINATURA, parse_mode='md')
+            f = await baixar_com_nome(msg, 0)
+            if f:
+                enviada = await client.send_file(DESTINO, f, caption=(texto + ASSINATURA) if texto else ASSINATURA, parse_mode='md', force_document=False)
             else:
                 enviada = await client.send_message(DESTINO, texto + ASSINATURA, parse_mode='md')
         else:
@@ -163,7 +181,6 @@ async def copiar_nova(event):
     msg = event.message
     grouped_id = getattr(msg, 'grouped_id', None)
     if grouped_id:
-        # Álbum: acumula e envia junto depois de 2.5s
         if grouped_id not in albuns_pendentes:
             albuns_pendentes[grouped_id] = []
             asyncio.create_task(enviar_album(grouped_id))
@@ -179,39 +196,33 @@ async def copiar_edicao(event):
         return
     id_destino = mapa_mensagens.get(msg.id)
     if not id_destino:
-        print(f"⚠️ Editada {msg.id} não encontrada, enviando como nova...")
         await copiar_nova(event)
         return
-    print(f"✏️ Admin editou {msg.id}, atualizando...")
     try:
-        novo_texto = texto + ASSINATURA + "\n\n✏️ _Atualizado_"
-        await client.edit_message(DESTINO, id_destino, novo_texto, parse_mode='md')
-        print("✅ Atualizado no seu canal!")
+        await client.edit_message(DESTINO, id_destino, texto + ASSINATURA + "\n\n✏️ _Atualizado_", parse_mode='md')
+        print("✅ Atualizado!")
     except Exception as e:
         print(f"❌ Erro ao editar: {e}")
         try:
             await client.delete_messages(DESTINO, id_destino)
             await copiar_nova(event)
         except Exception as e2:
-            print(f"❌ Erro ao reenviar: {e2}")
+            print(f"❌ Erro reenviar: {e2}")
 
 @client.on(events.MessageDeleted(chats=ORIGEM))
 async def copiar_exclusao(event):
-    ids_apagados = event.deleted_ids
-    print(f"🗑️ Detectado apagamento no trabalho: {ids_apagados}")
-    for id_origem in ids_apagados:
+    for id_origem in event.deleted_ids:
         id_destino = mapa_mensagens.get(id_origem)
         if not id_destino:
             continue
         try:
             await client.delete_messages(DESTINO, id_destino)
-            print(f"   ✅ Apagado no seu canal também (destino {id_destino})")
             del mapa_mensagens[id_origem]
             salvar_mapa()
         except Exception as e:
-            print(f"   ❌ Erro ao apagar {id_destino}: {e}")
+            print(f"❌ Erro apagar {id_destino}: {e}")
 
-print("🚀 Sistema Live21 v5.0 - ÁLBUM CORRIGIDO ligado!")
+print("🚀 Sistema Live21 v6.0 - FOTO DE VERDADE ligado!")
 print("👀 Ouvindo: @teamlive21 (SÓ ADMINS)")
 print("📤 Enviando para: @Live21streaming")
 print("✏️ Monitorando EDIÇÕES")
